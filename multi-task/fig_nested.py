@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
 
 # Define q and Q-norm functions
 def Q(z):
@@ -31,53 +30,62 @@ def mt_derivative(beta, beta_aux):
     norm2 = mt_norm(beta, beta_aux)
     return (np.log(norm1) - np.log(norm2)) / eps
 
-# Set up plot
+# Set up plots
 beta_aux_vals = np.logspace(-4, 2, 1000)
 beta_fixed = 1.0
 gamma = 1e-3
+initial_lambda = 0.0
 
-fig, ax = plt.subplots(figsize=(6, 4))
-plt.subplots_adjust(bottom=0.25)
+# Create first figure for the curves
+fig1 = plt.figure(figsize=(6, 4))
+ax1 = fig1.add_subplot(111)
 
 # Fixed MTL curve
 mtl_curve = [mt_derivative(beta_fixed, b_init) for b_init in beta_aux_vals]
-line_mtl, = ax.plot(beta_aux_vals, mtl_curve, color='purple', label='MTL', linewidth=0.75)
+line_mtl, = ax1.plot(beta_aux_vals, mtl_curve, color='purple', label='MTL', linewidth=0.75)
 
 # Initial PT+FT curve
-initial_lambda = 0.0
 ptft_curve = [generalized_q_norm_derivative(beta_fixed, b_init, gamma, initial_lambda)
               for b_init in beta_aux_vals]
-line_ptft, = ax.plot(beta_aux_vals, ptft_curve, color='darkgreen', label='PT+FT', linewidth=0.75)
+line_ptft, = ax1.plot(beta_aux_vals, ptft_curve, color='darkgreen', label='PT+FT', linewidth=0.75)
 
-# Axis config
-ax.set_xscale('log')
-ax.set_xlabel('Auxiliary magnitude')
-ax.set_ylabel('Order of penalty')
-ax.set_xticks([0.001, 10])
-ax.set_xticklabels(['0.001', '10'])
-ax.set_yticks([1, 2])
-ax.set_title(f'λ = {initial_lambda:.2f}')
-ax.axvline(x=1, color='grey', linestyle='--', alpha=0.5)
-ax.legend()
+# Axis config for first plot
+ax1.set_xscale('log')
+ax1.set_xlabel('Auxiliary magnitude')
+ax1.set_ylabel('Order of penalty')
+ax1.set_xticks([0.001, 10])
+ax1.set_xticklabels(['0.001', '10'])
+ax1.set_yticks([1, 2])
+ax1.set_title(f'λ = {initial_lambda:.2f}')
+ax1.axvline(x=1, color='grey', linestyle='--', alpha=0.5)
+ax1.legend()
 
 # Secondary y-axis for feature dependence
-ax2 = ax.twinx()
-ax2.set_ylim(ax.get_ylim())
-ax2.set_yticks([1, 0, -1])
-ax2.set_ylabel('Feature\ndependence')
+ax1_twin = ax1.twinx()
+ax1_twin.set_ylim(ax1.get_ylim())
+ax1_twin.set_yticks([1, 0, -1])
+ax1_twin.set_ylabel('Feature\ndependence')
 
-# Slider
-ax_slider = plt.axes([0.2, 0.1, 0.6, 0.03])
-lambda_slider = Slider(ax_slider, 'λ', -10.0, 10.0, valinit=initial_lambda, valstep=0.1)
+# Create second figure for the heatmap
+fig2 = plt.figure(figsize=(6, 4))
+ax2 = fig2.add_subplot(111)
 
-def update(val):
-    lam = lambda_slider.val
-    new_ptft = [generalized_q_norm_derivative(beta_fixed, b_init, gamma, lam)
-                for b_init in beta_aux_vals]
-    line_ptft.set_ydata(new_ptft)
-    ax.set_title(f'λ = {lam:.2f}')
-    fig.canvas.draw_idle()
+# Create heatmap data
+lambda_vals = np.linspace(-2.5, 2.5, 100)
+beta_aux_vals_heatmap = np.logspace(-4, 2, 100)
+X, Y = np.meshgrid(beta_aux_vals_heatmap, lambda_vals)
+Z = np.zeros_like(X)
 
-lambda_slider.on_changed(update)
+for i, lam in enumerate(lambda_vals):
+    for j, beta_aux in enumerate(beta_aux_vals_heatmap):
+        Z[i, j] = generalized_q_norm_derivative(beta_fixed, beta_aux, gamma, lam)
+
+# Plot heatmap
+im = ax2.pcolormesh(X, Y, Z, shading='auto', cmap='viridis')
+ax2.set_xscale('log')
+ax2.set_xlabel('Auxiliary magnitude')
+ax2.set_ylabel('λ value')
+ax2.set_title('Order of penalty heatmap')
+plt.colorbar(im, ax=ax2, label='Order of penalty')
 
 plt.show()
