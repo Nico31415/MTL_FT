@@ -37,6 +37,22 @@ def l1_norm(x):
 def l2_norm(x):
     return torch.sqrt(torch.sum(torch.abs(x)**2)).item()
 
+def compute_c(model):
+    with torch.no_grad():
+        c = (torch.sum(model.w_pos * model.w_neg) + torch.sum(model.v_pos * model.v_neg)).item()
+    return c
+
+def compute_lambda(model):
+    with torch.no_grad():
+        beta = model.beta()
+        l1 = l1_norm(beta)
+        l2 = l2_norm(beta)
+        if l1 > 0:
+            lambda_val = l2 / l1
+        else:
+            lambda_val = 0.0
+    return lambda_val
+
 def train(model, train_data, val_data, test_every_n_epochs=50, epochs=1000, lr=0.01, momentum=0., lr_tuning=True, test_at_end_only=False, threshold=1e-5):
     or_model = deepcopy(model)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum)
@@ -122,7 +138,15 @@ def main(args):
     y = teacher(x, *param)
     val_y = teacher(val_x, *param)
     net = DiagonalNet(args.inp_dim, scaling=args.scaling)
+    # Print initial values
+    c_pt = compute_c(net)
+    lambda_pt = compute_lambda(net)
+    print(f"Before pretraining: c_pt = {c_pt:.6f}, lambda_pt = {lambda_pt:.6f}")
     df, net, norm_df = train(net, (x, y), (val_x, val_y), lr=args.lr, epochs=args.epochs, lr_tuning=(not args.no_tuning), threshold=args.threshold)
+    # Print final values
+    c_pt_final = compute_c(net)
+    lambda_pt_final = compute_lambda(net)
+    print(f"After pretraining: c_pt = {c_pt_final:.6f}, lambda_pt = {lambda_pt_final:.6f}")
     df.to_feather(os.path.join(args.save_folder, 'df.feather'))
     norm_df.to_feather(os.path.join(args.save_folder, 'norm_df.feather'))
     teacher_df = pd.DataFrame({

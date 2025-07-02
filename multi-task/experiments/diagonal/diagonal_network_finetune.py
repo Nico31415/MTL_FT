@@ -232,6 +232,31 @@ def select_output(outp, task):
     task_oh = F.one_hot(task, outp.shape[1])
     return (outp*task_oh).sum(dim=-1)
 
+def compute_c(model):
+    with torch.no_grad():
+        if hasattr(model, 'w_pos') and model.w_pos.dim() == 1:
+            c = (torch.sum(model.w_pos * model.w_neg) + torch.sum(model.v_pos * model.v_neg)).item()
+        else:
+            c1 = (torch.sum(model.w_pos[:, 0] * model.w_neg[:, 0]) + torch.sum(model.v_pos[:, 0] * model.v_neg[:, 0])).item()
+            c2 = (torch.sum(model.w_pos[:, 0] * model.w_neg[:, 0]) + torch.sum(model.v_pos[:, 1] * model.v_neg[:, 1])).item()
+            c = (c1 + c2) / 2
+    return c
+
+def compute_lambda(model):
+    with torch.no_grad():
+        beta = model.beta()
+        if beta.dim() == 1:
+            l1 = l1_norm(beta)
+            l2 = l2_norm(beta)
+        else:
+            l1 = l1_norm(beta[:, 1])
+            l2 = l2_norm(beta[:, 1])
+        if l1 > 0:
+            lambda_val = l2 / l1
+        else:
+            lambda_val = 0.0
+    return lambda_val
+
 def main(args):
     Path(os.path.dirname(args.save_path)).mkdir(parents=True, exist_ok=True)
     torch.manual_seed(args.seed)
@@ -279,7 +304,11 @@ def main(args):
     if args.save_weights:
         print('Saving weights')
         print(os.path.join(args.save_path, 'weights_df.feather'))
-        df_weights.to_feather(os.path.join(args.save_path, 'weights_df.feather')) 
+        df_weights.to_feather(os.path.join(args.save_path, 'weights_df.feather'))
+    # After training, print the final values
+    c_ft = compute_c(model)
+    lambda_ft = compute_lambda(model)
+    print(f"After finetuning: c_ft = {c_ft:.6f}, lambda_ft = {lambda_ft:.6f}")
 
 def get_parser():
     parser = argparse.ArgumentParser()

@@ -7,12 +7,12 @@ from typing import Tuple
 
 @dataclass
 class NetworkConfig:
-    d: int = 2   # input dimension
-    o: int = 5   # output dimension
+    d: int = 1   # input dimension
+    o: int = 1   # output dimension
     N: int = 5   # number of samples
-    T: int = 500
-    lr: float = 1e-3
-    scale: float = 0.01
+    T: int = 100
+    lr: float = 1e-6
+    scale: float = 0.1
     teacher_scale: float = 5.0
     seed: int = 42
 
@@ -50,11 +50,30 @@ class DiagonalNetwork(nn.Module):
         d, o = self.config.d, self.config.o
         scale = self.config.scale
 
-        # independent initialization for each branch
-        self.u_plus  = nn.Parameter(torch.randn(d, o) * scale)
-        self.u_minus = nn.Parameter(torch.randn(d, o) * scale)
-        self.v_plus  = nn.Parameter(torch.randn(d)     * scale)
-        self.v_minus = nn.Parameter(torch.randn(d)     * scale)
+        # Initialize u_plus, v_plus, v_minus to random nonnegative values
+        self.u_plus  = nn.Parameter(torch.abs(torch.randn(d, o)) * scale)
+        self.v_plus  = nn.Parameter(torch.abs(torch.randn(d)) * scale)
+        self.v_minus = nn.Parameter(torch.abs(torch.randn(d)) * scale)
+
+        # Compute required sum of squares for u_minus for each i
+        with torch.no_grad():
+            u_plus_np = self.u_plus.detach().cpu().numpy()  # (d, o)
+            v_plus_np = self.v_plus.detach().cpu().numpy()  # (d,)
+            v_minus_np = self.v_minus.detach().cpu().numpy()  # (d,)
+
+            # Compute u_minus^2 = v_minus^2 - (v_plus^2 - u_plus^2)
+            u_minus_sq = v_minus_np[:, None]**2 - (v_plus_np[:, None]**2 - u_plus_np**2)
+            u_minus_np = np.sqrt(np.maximum(u_minus_sq, 0))
+            self.u_minus = nn.Parameter(torch.tensor(u_minus_np, dtype=torch.float32))
+
+        # Optional: Print check for invariance
+        with torch.no_grad():
+            v_plus_np = self.v_plus.detach().cpu().numpy()
+            u_plus_np = self.u_plus.detach().cpu().numpy()
+            v_minus_np = self.v_minus.detach().cpu().numpy()
+            u_minus_np = self.u_minus.detach().cpu().numpy()
+            diff = (v_plus_np**2 - np.sum(u_plus_np**2, axis=1)) - (v_minus_np**2 - np.sum(u_minus_np**2, axis=1))
+            print('Max abs difference in invariants at init:', np.max(np.abs(diff)))
 
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Effective weight matrix W = u⁺∘v⁺ - u⁻∘v⁻
@@ -223,11 +242,194 @@ class DiagonalNetwork(nn.Module):
             plt.title(title), plt.legend(), plt.grid(True)
         plt.tight_layout(), plt.show()
 
+def compute_c(net):
+    # v_plus * v_minus  → (d,)
+    # (u_plus * u_minus).sum(dim=1)  → (d,)
+    with torch.no_grad():
+        return (
+            net.v_plus * net.v_minus
+            + (net.u_plus * net.u_minus).sum(dim=1)
+        ).cpu().numpy()
+
+def compute_lambda(net):
+    # v_plus**2  → (d,)
+    # (u_plus**2).sum(dim=1)  → (d,)
+    with torch.no_grad():
+        return (
+            net.v_plus**2
+            - (net.u_plus**2).sum(dim=1)
+        ).cpu().numpy()
+
+# def compute_c(network):
+#     with torch.no_grad():
+#         c = network.v_plus * network.v_minus + (network.u_plus * network.u_minus).T
+#         # c = v_plus * v_minus + sum_j u_plus[i, j] * u_minus[i, j] for each i
+#         # u_plus = network.u_plus
+#         # u_minus = network.u_minus
+#         # v_plus = network.v_plus
+#         # v_minus = network.v_minus
+#         # c = v_plus * v_minus + torch.sum(u_plus * u_minus, dim=1)
+#         return c.cpu().numpy() if hasattr(c, 'cpu') else c
+
+# def compute_lambda(network):
+#     with torch.no_grad():
+#         lambda_val = network.v_plus * network.v_plus - (network.u_plus * network.u_plus).T
+#         # # lambda = v_plus**2 - sum_j u_plus[i, j]**2 for each i
+#         # v_plus = network.v_plus
+#         # u_plus = network.u_plus
+#         # lambda_val = v_plus**2 - torch.sum(u_plus**2, dim=1)
+#         return lambda_val.cpu().numpy() if hasattr(lambda_val, 'cpu') else lambda_val
+
+# def predict_parameters(lambda_val, c, beta):
+#     # Validate inputs
+#     if np.any(lambda_val <= 0):
+#         raise ValueError("All lambda_val elements must be positive.")
+#     if np.any(c / lambda_val < 1):
+#         raise ValueError("All c / lambda_val elements must be >= 1 for arccosh.")
+
+#     sqrt_lambda = np.sqrt(lambda_val)
+#     c_over_lambda = c / lambda_val
+#     beta_over_c = beta / c[:, None]  # Make sure shapes broadcast correctly
+
+#     v_plus = sqrt_lambda[:, None] * np.cosh(
+#         0.5 * (np.arccosh(c_over_lambda)[:, None] + np.arcsinh(beta_over_c))
+#     )
+#     u_plus = sqrt_lambda[:, None] * np.sinh(
+#         0.5 * (np.arccosh(c_over_lambda)[:, None] + np.arcsinh(beta_over_c))
+#     )
+#     v_minus = sqrt_lambda[:, None] * np.cosh(
+#         0.5 * (np.arccosh(c_over_lambda)[:, None] - np.arcsinh(beta_over_c))
+#     )
+#     u_minus = sqrt_lambda[:, None] * np.sinh(
+#         0.5 * (np.arccosh(c_over_lambda)[:, None] - np.arcsinh(beta_over_c))
+#     )
+
+#     return v_plus, u_plus, v_minus, u_minus
+
+
+def predict_parameters(lambda_val, c, beta):
+    lambda_val = np.array(lambda_val).flatten()  # shape (d,)
+    c = np.array(c).flatten()                    # shape (d,)
+    beta = np.array(beta)                        # shape (d, o)
+    d, o = beta.shape
+
+    abs_lambda = np.abs(lambda_val)
+    sqrt_lambda = np.sqrt(abs_lambda)
+    c_over_lambda = c / abs_lambda
+    beta_over_c = beta / c
+
+    # # Clip c_over_lambda to be >= 1 to avoid nan in arccosh
+    # c_over_lambda_clipped = np.clip(c_over_lambda, 1, None)
+
+    theta_plus = 0.5 * (np.arccosh(c_over_lambda) + np.arcsinh(beta_over_c))
+    theta_minus = 0.5 * (np.arccosh(c_over_lambda) - np.arcsinh(beta_over_c))
+
+    is_pos = lambda_val > 0
+    is_neg = ~is_pos
+
+    v_plus = np.zeros((d, o))
+    u_plus = np.zeros((d, o))
+    v_minus = np.zeros((d, o))
+    u_minus = np.zeros((d, o))
+
+    if np.any(is_pos):
+        v_plus[is_pos]  = sqrt_lambda[is_pos] * np.cosh(theta_plus[is_pos])
+        u_plus[is_pos]  = sqrt_lambda[is_pos] * np.sinh(theta_plus[is_pos])
+        v_minus[is_pos] = sqrt_lambda[is_pos] * np.cosh(theta_minus[is_pos])
+        u_minus[is_pos] = sqrt_lambda[is_pos] * np.sinh(theta_minus[is_pos])
+
+    if np.any(is_neg):
+        u_plus[is_neg]  = sqrt_lambda[is_neg] * np.cosh(theta_plus[is_neg])
+        v_plus[is_neg]  = sqrt_lambda[is_neg] * np.sinh(theta_plus[is_neg])
+        u_minus[is_neg] = sqrt_lambda[is_neg] * np.cosh(theta_minus[is_neg])
+        v_minus[is_neg] = sqrt_lambda[is_neg] * np.sinh(theta_minus[is_neg])
+
+    # v_plus_pred and v_minus_pred should be (d,), not (d, o)
+    # For now, use the first output (j=0) for each input dimension
+    v_plus_pred = v_plus[:, 0]
+    v_minus_pred = v_minus[:, 0]
+    u_plus_pred = u_plus
+    u_minus_pred = u_minus
+
+    return v_plus_pred, u_plus_pred, v_minus_pred, u_minus_pred
+
+# def predict_parameters(lambda_val, c, beta):
+#     lambda_val = np.array(lambda_val).flatten()  # shape (d,)
+#     c = np.array(c).flatten()                    # shape (d,)
+#     beta = np.array(beta).flatten()              # shape (d,)
+
+#     d = beta.shape[0]
+
+#     abs_lambda = np.abs(lambda_val)
+#     sqrt_lambda = np.sqrt(abs_lambda)
+#     c_over_lambda = c / abs_lambda
+#     beta_over_c = beta / c
+
+#     # Clip to ensure numerical stability
+#     c_over_lambda = np.clip(c_over_lambda, 1, None)
+
+#     theta_plus = 0.5 * (np.arccosh(c_over_lambda) + np.arcsinh(beta_over_c))
+#     theta_minus = 0.5 * (np.arccosh(c_over_lambda) - np.arcsinh(beta_over_c))
+
+#     v_plus = np.zeros(d)
+#     u_plus = np.zeros(d)
+#     v_minus = np.zeros(d)
+#     u_minus = np.zeros(d)
+
+#     is_pos = lambda_val > 0
+#     is_neg = ~is_pos
+
+#     # λ > 0
+#     v_plus[is_pos]  = sqrt_lambda[is_pos] * np.cosh(theta_plus[is_pos])
+#     u_plus[is_pos]  = sqrt_lambda[is_pos] * np.sinh(theta_plus[is_pos])
+#     v_minus[is_pos] = sqrt_lambda[is_pos] * np.cosh(theta_minus[is_pos])
+#     u_minus[is_pos] = sqrt_lambda[is_pos] * np.sinh(theta_minus[is_pos])
+
+#     # λ < 0
+#     u_plus[is_neg]  = sqrt_lambda[is_neg] * np.cosh(theta_plus[is_neg])
+#     v_plus[is_neg]  = sqrt_lambda[is_neg] * np.sinh(theta_plus[is_neg])
+#     u_minus[is_neg] = sqrt_lambda[is_neg] * np.cosh(theta_minus[is_neg])
+#     v_minus[is_neg] = sqrt_lambda[is_neg] * np.sinh(theta_minus[is_neg])
+
+#     return v_plus, u_plus, v_minus, u_minus
+
+
 
 def main():
     config  = NetworkConfig()
     network = DiagonalNetwork(config)
+    # Print c and lambda before training
+    c_pt = compute_c(network)
+    lambda_pt = compute_lambda(network)
+    print(f"Before training: c_pt = {c_pt}, lambda_pt = {lambda_pt}")
     network.train()
+    # Print c and lambda after training
+    c_ft = compute_c(network)
+    lambda_ft = compute_lambda(network)
+    print(f"After training: c_ft = {c_ft}, lambda_ft = {lambda_ft}")
+    # Print final learned parameters
+    print("Final learned parameters:")
+    print("u_plus =", network.u_plus.detach().cpu().numpy())
+    print("u_minus =", network.u_minus.detach().cpu().numpy())
+    print("v_plus =", network.v_plus.detach().cpu().numpy())
+    print("v_minus =", network.v_minus.detach().cpu().numpy())
+
+    # Compute final w_tilde (beta)
+    with torch.no_grad():
+        w_tilde_final = (network.u_plus * network.v_plus[:, None] - network.u_minus * network.v_minus[:, None]).cpu().numpy()
+
+    # Predict parameters using your theory
+    lambda_pred = compute_lambda(network)
+    c_pred = compute_c(network)
+    beta_pred = w_tilde_final
+    v_plus_pred, u_plus_pred, v_minus_pred, u_minus_pred = predict_parameters(lambda_pred, c_pred, beta_pred)
+
+    print("\nPredicted parameters (from theory):")
+    print("u_plus_pred =", u_plus_pred)
+    print("u_minus_pred =", u_minus_pred)
+    print("v_plus_pred =", v_plus_pred)
+    print("v_minus_pred =", v_minus_pred)
+
     network.plot_training_results()
 
 if __name__ == "__main__":
