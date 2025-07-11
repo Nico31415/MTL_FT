@@ -7,10 +7,10 @@ from typing import Tuple
 
 @dataclass
 class NetworkConfig:
-    d: int = 5  # input dimension
+    d: int = 10  # input dimension
     o: int = 1   # output dimension
     N: int = 5   # number of samples
-    T: int = 10000
+    T: int = 100000
     lr: float = 1e-9
     scale: float = 0.1
     teacher_scale: float = 5.0
@@ -68,8 +68,9 @@ class DiagonalNetwork(nn.Module):
 
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Effective weight matrix W = u⁺∘v⁺ - u⁻∘v⁻
-        w_tilde = (self.u_plus * self.v_plus[:, None]
-                   - self.u_minus * self.v_minus[:, None])
+        # w_tilde = (self.u_plus * self.v_plus[:, None]
+        #            - self.u_minus * self.v_minus[:, None])
+        w_tilde = self.u_plus * self.v_plus - self.u_minus * self.v_minus
         preds = w_tilde.T @ self.X_torch
         error = preds - self.y_torch
         return w_tilde, preds, error
@@ -95,8 +96,8 @@ class DiagonalNetwork(nn.Module):
         G       = (X @ error.T) / N                    # (d, o)
 
         # Parameter-wise gradients
-        du_plus  =  G * v_plus[:, None]                 # dL/dU⁺
-        du_minus = -G * v_minus[:, None]                # dL/dU⁻
+        du_plus  =  G * v_plus                 # dL/dU⁺
+        du_minus = -G * v_minus               # dL/dU⁻
         dv_plus  =  np.sum(u_plus  * G, axis=1)         # dL/dv⁺
         dv_minus = -np.sum(u_minus * G, axis=1)         # dL/dv⁻
 
@@ -108,11 +109,13 @@ class DiagonalNetwork(nn.Module):
 
         # Induced change in w_tilde
         dw_tilde_dt = (
-            du_plus_dt * v_plus[:, None]
-            + u_plus * dv_plus_dt[:, None]
-            - du_minus_dt * v_minus[:, None]
-            - u_minus * dv_minus_dt[:, None]
+            du_plus_dt * v_plus
+            + u_plus * dv_plus_dt
+            - du_minus_dt * v_minus
+            - u_minus * dv_minus_dt
         )
+
+
 
         # Predicted loss decay
         dL_dt = np.sum(G * dw_tilde_dt)
@@ -320,17 +323,17 @@ def main():
     print('Empirical: ')
     print('lambda plus: ', network.v_plus.detach().cpu().numpy()**2 - network.u_plus.detach().cpu().numpy()**2)
     print('lambda minus: ', network.v_minus.detach().cpu().numpy()**2 - network.u_minus.detach().cpu().numpy()**2)
-    print('c: ', network.v_plus.detach().cpu().numpy() * network.v_minus.detach().cpu().numpy() + (network.u_plus.detach().cpu().numpy() * network.u_minus.detach().cpu().numpy()))
+    # print('c: ', network.v_plus.detach().cpu().numpy() * network.v_minus.detach().cpu().numpy() + (network.u_plus.detach().cpu().numpy() * network.u_minus.detach().cpu().numpy()))
     print('Analytical: ')
     print('lambda plus: ', v_plus_pred**2 - u_plus_pred**2)
     print('lambda minus: ', v_minus_pred**2 - u_minus_pred**2)
-    print('c: ', v_plus_pred * v_minus_pred + (u_plus_pred * u_minus_pred))
+    # print('c: ', v_plus_pred * v_minus_pred + (u_plus_pred * u_minus_pred))
 
-    # print('Differences between predicted and true parameters:')
-    # print('u_plus_pred - u_plus_true =', np.linalg.norm(u_plus_pred - network.u_plus.detach().cpu().numpy()))
-    # print('u_minus_pred - u_minus_true =', np.linalg.norm(u_minus_pred - network.u_minus.detach().cpu().numpy()))
-    # print('v_plus_pred - v_plus_true =', np.linalg.norm(v_plus_pred - network.v_plus.detach().cpu().numpy()))
-    # print('v_minus_pred - v_minus_true =', np.linalg.norm(v_minus_pred - network.v_minus.detach().cpu().numpy()))
+    print('Differences between predicted and true parameters:')
+    print('u_plus_pred - u_plus_true =', np.linalg.norm(u_plus_pred - network.u_plus.detach().cpu().numpy()))
+    print('u_minus_pred - u_minus_true =', np.linalg.norm(u_minus_pred - network.u_minus.detach().cpu().numpy()))
+    print('v_plus_pred - v_plus_true =', np.linalg.norm(v_plus_pred - network.v_plus.detach().cpu().numpy()))
+    print('v_minus_pred - v_minus_true =', np.linalg.norm(v_minus_pred - network.v_minus.detach().cpu().numpy()))
 
     network.plot_training_results()
 
