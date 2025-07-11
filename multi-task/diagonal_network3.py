@@ -5,6 +5,10 @@ import torch.nn as nn
 from dataclasses import dataclass
 from typing import Tuple
 
+# Set precision for better numerical stability
+torch.set_default_dtype(torch.float64)
+np.set_printoptions(precision=15)
+
 @dataclass
 class NetworkConfig:
     d: int = 10  # input dimension
@@ -43,17 +47,17 @@ class DiagonalNetwork(nn.Module):
         self.X = np.random.randn(self.config.d, self.config.N)
         self.y = (self.true_beta.T @ self.X)
 
-        self.X_torch = torch.tensor(self.X, dtype=torch.float32)
-        self.y_torch = torch.tensor(self.y, dtype=torch.float32)
+        self.X_torch = torch.tensor(self.X, dtype=torch.float64)
+        self.y_torch = torch.tensor(self.y, dtype=torch.float64)
 
     def _init_parameters(self):
         d, o = self.config.d, self.config.o
         scale = self.config.scale
 
         # Initialize u_plus, v_plus, v_minus to random nonnegative values
-        self.u_plus  = nn.Parameter(torch.abs(torch.randn(d, o)) * scale)
-        self.v_plus  = nn.Parameter(torch.abs(torch.randn(d, 1)) * scale)
-        self.u_minus = nn.Parameter(torch.abs(torch.randn(d, o)) * scale + torch.sqrt(torch.abs(self.v_plus**2 - self.u_plus**2))) 
+        self.u_plus  = nn.Parameter(torch.abs(torch.randn(d, o, dtype=torch.float64)) * scale)
+        self.v_plus  = nn.Parameter(torch.abs(torch.randn(d, 1, dtype=torch.float64)) * scale)
+        self.u_minus = nn.Parameter(torch.abs(torch.randn(d, o, dtype=torch.float64)) * scale + torch.sqrt(torch.abs(self.v_plus**2 - self.u_plus**2))) 
         self.v_minus = nn.Parameter(torch.sqrt(self.u_minus**2 + self.v_plus**2 - self.u_plus**2).clone())
     
 
@@ -92,7 +96,7 @@ class DiagonalNetwork(nn.Module):
         # Build w_tilde and compute core gradient G
         # w_tilde = u_plus * v_plus[:, None] - u_minus * v_minus[:, None]
         w_tilde = self.u_plus * self.v_plus - self.u_minus * self.v_minus
-        error   = (w_tilde.T).detach().numpy() @ X - Y                     # (o, N)
+        error   = (w_tilde.T).detach().cpu().numpy() @ X - Y                     # (o, N)
         G       = (X @ error.T) / N                    # (d, o)
 
         # Parameter-wise gradients
