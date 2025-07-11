@@ -7,11 +7,11 @@ from typing import Tuple
 
 @dataclass
 class NetworkConfig:
-    d: int = 1   # input dimension
+    d: int = 5  # input dimension
     o: int = 1   # output dimension
     N: int = 5   # number of samples
-    T: int = 100
-    lr: float = 1e-6
+    T: int = 10000
+    lr: float = 1e-9
     scale: float = 0.1
     teacher_scale: float = 5.0
     seed: int = 42
@@ -52,19 +52,10 @@ class DiagonalNetwork(nn.Module):
 
         # Initialize u_plus, v_plus, v_minus to random nonnegative values
         self.u_plus  = nn.Parameter(torch.abs(torch.randn(d, o)) * scale)
-        self.v_plus  = nn.Parameter(torch.abs(torch.randn(d)) * scale)
-        self.v_minus = nn.Parameter(torch.abs(torch.randn(d)) * scale)
-
-        # Compute required sum of squares for u_minus for each i
-        with torch.no_grad():
-            u_plus_np = self.u_plus.detach().cpu().numpy()  # (d, o)
-            v_plus_np = self.v_plus.detach().cpu().numpy()  # (d,)
-            v_minus_np = self.v_minus.detach().cpu().numpy()  # (d,)
-
-            # Compute u_minus^2 = v_minus^2 - (v_plus^2 - u_plus^2)
-            u_minus_sq = v_minus_np[:, None]**2 - (v_plus_np[:, None]**2 - u_plus_np**2)
-            u_minus_np = np.sqrt(np.maximum(u_minus_sq, 0))
-            self.u_minus = nn.Parameter(torch.tensor(u_minus_np, dtype=torch.float32))
+        self.v_plus  = nn.Parameter(torch.abs(torch.randn(d, 1)) * scale)
+        self.u_minus = nn.Parameter(torch.abs(torch.randn(d, o)) * scale + torch.sqrt(torch.abs(self.v_plus**2 - self.u_plus**2))) 
+        self.v_minus = nn.Parameter(torch.sqrt(self.u_minus**2 + self.v_plus**2 - self.u_plus**2).clone())
+    
 
         # Optional: Print check for invariance
         with torch.no_grad():
@@ -72,7 +63,7 @@ class DiagonalNetwork(nn.Module):
             u_plus_np = self.u_plus.detach().cpu().numpy()
             v_minus_np = self.v_minus.detach().cpu().numpy()
             u_minus_np = self.u_minus.detach().cpu().numpy()
-            diff = (v_plus_np**2 - np.sum(u_plus_np**2, axis=1)) - (v_minus_np**2 - np.sum(u_minus_np**2, axis=1))
+            diff = (v_plus_np**2 - u_plus_np**2) - (v_minus_np**2 - u_minus_np**2)
             print('Max abs difference in invariants at init:', np.max(np.abs(diff)))
 
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -98,8 +89,9 @@ class DiagonalNetwork(nn.Module):
         lr      = self.config.lr
 
         # Build w_tilde and compute core gradient G
-        w_tilde = u_plus * v_plus[:, None] - u_minus * v_minus[:, None]
-        error   = w_tilde.T @ X - Y                     # (o, N)
+        # w_tilde = u_plus * v_plus[:, None] - u_minus * v_minus[:, None]
+        w_tilde = self.u_plus * self.v_plus - self.u_minus * self.v_minus
+        error   = (w_tilde.T).detach().numpy() @ X - Y                     # (o, N)
         G       = (X @ error.T) / N                    # (d, o)
 
         # Parameter-wise gradients
@@ -198,49 +190,27 @@ class DiagonalNetwork(nn.Module):
             self.optimizer.step()
 
     def plot_training_results(self):
-        # Convert histories to arrays
-        u_plus_history       = np.array(self.u_plus_history)
-        u_minus_history      = np.array(self.u_minus_history)
-        v_plus_history       = np.array(self.v_plus_history)
-        v_minus_history      = np.array(self.v_minus_history)
-        w_tilde_history      = np.array(self.w_tilde_history)
-
-        empirical_dloss    = np.diff(self.loss_history)
-        du_plus_empirical  = -np.diff(u_plus_history, axis=0) / self.config.lr
-        du_minus_empirical = -np.diff(u_minus_history, axis=0) / self.config.lr
-        dv_plus_empirical  = -np.diff(v_plus_history, axis=0) / self.config.lr
-        dv_minus_empirical = -np.diff(v_minus_history, axis=0) / self.config.lr
-        dw_tilde_empirical =  np.diff(w_tilde_history, axis=0)
-
-        du_plus_analytical  = np.array(self.du_plus_analytical[:-1])
-        du_minus_analytical = np.array(self.du_minus_analytical[:-1])
-        dv_plus_analytical  = np.array(self.dv_plus_analytical[:-1])
-        dv_minus_analytical = np.array(self.dv_minus_analytical[:-1])
-        dw_tilde_analytical = np.array(self.dw_tilde_analytical[:-1])
-
-        # Plot parameters & rates (omitted for brevity)... (same as before)
-
-        # Plot invariants derivatives
-        c_arr     = np.array(self.c_history)
-        dp_arr    = np.array(self.delta_plus_history)
-        dm_arr    = np.array(self.delta_minus_history)
-        dc_emp    = np.diff(c_arr, axis=0)
-        ddp_emp   = np.diff(dp_arr, axis=0)
-        ddm_emp   = np.diff(dm_arr, axis=0)
-
-        dC_anal   = np.array(self.dC_dt_analytical[:-1])
-        ddp_anal  = np.array(self.ddelta_plus_dt_analytical[:-1])
-        ddm_anal  = np.array(self.ddelta_minus_dt_analytical[:-1])
-
-        plt.figure(figsize=(10,9))
-        titles = ['dC/dt','ddelta_plus/dt','ddelta_minus/dt']
-        for idx,(emp,anal,title) in enumerate([(dc_emp,dC_anal,'dC/dt'),(ddp_emp,ddp_anal,'ddelta_plus/dt'),(ddm_emp,ddm_anal,'ddelta_minus/dt')]):
-            plt.subplot(3,1,idx+1)
-            for i in range(emp.shape[1]):
-                plt.plot(emp[:,i], label=f'Emp {title}[{i}]')
-                plt.plot(anal[:,i],'--',label=f'Anl {title}[{i}]')
-            plt.title(title), plt.legend(), plt.grid(True)
-        plt.tight_layout(), plt.show()
+        # Print basic training statistics instead of plotting
+        # print(f"Training completed in {self.config.T} steps")
+        # print(f"Final loss: {self.loss_history[-1]:.6f}")
+        # print(f"Initial loss: {self.loss_history[0]:.6f}")
+        # print(f"Loss reduction: {self.loss_history[0] - self.loss_history[-1]:.6f}")
+        
+        # Print final parameter values
+        # print(f"\nFinal parameters:")
+        # print(f"u_plus: {self.u_plus.detach().cpu().numpy()}")
+        # print(f"u_minus: {self.u_minus.detach().cpu().numpy()}")
+        # print(f"v_plus: {self.v_plus.detach().cpu().numpy()}")
+        # print(f"v_minus: {self.v_minus.detach().cpu().numpy()}")
+        
+        # Print final invariants
+        c_final = self.c_history[-1]
+        delta_plus_final = self.delta_plus_history[-1]
+        delta_minus_final = self.delta_minus_history[-1]
+        # print(f"\nFinal invariants:")
+        # print(f"C: {c_final}")
+        # print(f"delta_plus: {delta_plus_final}")
+        # print(f"delta_minus: {delta_minus_final}")
 
 def compute_c(net):
     # v_plus * v_minus  → (d,)
@@ -248,7 +218,7 @@ def compute_c(net):
     with torch.no_grad():
         return (
             net.v_plus * net.v_minus
-            + (net.u_plus * net.u_minus).sum(dim=1)
+            + (net.u_plus * net.u_minus)
         ).cpu().numpy()
 
 def compute_lambda(net):
@@ -257,66 +227,21 @@ def compute_lambda(net):
     with torch.no_grad():
         return (
             net.v_plus**2
-            - (net.u_plus**2).sum(dim=1)
+            - net.u_plus**2
         ).cpu().numpy()
-
-# def compute_c(network):
-#     with torch.no_grad():
-#         c = network.v_plus * network.v_minus + (network.u_plus * network.u_minus).T
-#         # c = v_plus * v_minus + sum_j u_plus[i, j] * u_minus[i, j] for each i
-#         # u_plus = network.u_plus
-#         # u_minus = network.u_minus
-#         # v_plus = network.v_plus
-#         # v_minus = network.v_minus
-#         # c = v_plus * v_minus + torch.sum(u_plus * u_minus, dim=1)
-#         return c.cpu().numpy() if hasattr(c, 'cpu') else c
-
-# def compute_lambda(network):
-#     with torch.no_grad():
-#         lambda_val = network.v_plus * network.v_plus - (network.u_plus * network.u_plus).T
-#         # # lambda = v_plus**2 - sum_j u_plus[i, j]**2 for each i
-#         # v_plus = network.v_plus
-#         # u_plus = network.u_plus
-#         # lambda_val = v_plus**2 - torch.sum(u_plus**2, dim=1)
-#         return lambda_val.cpu().numpy() if hasattr(lambda_val, 'cpu') else lambda_val
-
-# def predict_parameters(lambda_val, c, beta):
-#     # Validate inputs
-#     if np.any(lambda_val <= 0):
-#         raise ValueError("All lambda_val elements must be positive.")
-#     if np.any(c / lambda_val < 1):
-#         raise ValueError("All c / lambda_val elements must be >= 1 for arccosh.")
-
-#     sqrt_lambda = np.sqrt(lambda_val)
-#     c_over_lambda = c / lambda_val
-#     beta_over_c = beta / c[:, None]  # Make sure shapes broadcast correctly
-
-#     v_plus = sqrt_lambda[:, None] * np.cosh(
-#         0.5 * (np.arccosh(c_over_lambda)[:, None] + np.arcsinh(beta_over_c))
-#     )
-#     u_plus = sqrt_lambda[:, None] * np.sinh(
-#         0.5 * (np.arccosh(c_over_lambda)[:, None] + np.arcsinh(beta_over_c))
-#     )
-#     v_minus = sqrt_lambda[:, None] * np.cosh(
-#         0.5 * (np.arccosh(c_over_lambda)[:, None] - np.arcsinh(beta_over_c))
-#     )
-#     u_minus = sqrt_lambda[:, None] * np.sinh(
-#         0.5 * (np.arccosh(c_over_lambda)[:, None] - np.arcsinh(beta_over_c))
-#     )
-
-#     return v_plus, u_plus, v_minus, u_minus
-
 
 def predict_parameters(lambda_val, c, beta):
     lambda_val = np.array(lambda_val).flatten()  # shape (d,)
     c = np.array(c).flatten()                    # shape (d,)
-    beta = np.array(beta)                        # shape (d, o)
-    d, o = beta.shape
+    beta = np.array(beta).flatten()                       # shape (d, o)
+    # d, o = beta.shape
+    d = len(beta)
+    o = 1
 
     abs_lambda = np.abs(lambda_val)
     sqrt_lambda = np.sqrt(abs_lambda)
-    c_over_lambda = c / abs_lambda
-    beta_over_c = beta / c
+    c_over_lambda = (c / abs_lambda)
+    beta_over_c = (beta.T / c)  # Make sure shapes broadcast correctly
 
     # # Clip c_over_lambda to be >= 1 to avoid nan in arccosh
     # c_over_lambda_clipped = np.clip(c_over_lambda, 1, None)
@@ -333,67 +258,27 @@ def predict_parameters(lambda_val, c, beta):
     u_minus = np.zeros((d, o))
 
     if np.any(is_pos):
-        v_plus[is_pos]  = sqrt_lambda[is_pos] * np.cosh(theta_plus[is_pos])
-        u_plus[is_pos]  = sqrt_lambda[is_pos] * np.sinh(theta_plus[is_pos])
-        v_minus[is_pos] = sqrt_lambda[is_pos] * np.cosh(theta_minus[is_pos])
-        u_minus[is_pos] = sqrt_lambda[is_pos] * np.sinh(theta_minus[is_pos])
+        v_plus[is_pos]  = (sqrt_lambda[is_pos] * np.cosh(theta_plus[is_pos])).reshape(-1, 1)
+        u_plus[is_pos]  = (sqrt_lambda[is_pos] * np.sinh(theta_plus[is_pos])).reshape(-1, 1)
+        v_minus[is_pos] = (sqrt_lambda[is_pos] * np.cosh(theta_minus[is_pos])).reshape(-1, 1)
+        u_minus[is_pos] = (sqrt_lambda[is_pos] * np.sinh(theta_minus[is_pos])).reshape(-1, 1)
 
     if np.any(is_neg):
-        u_plus[is_neg]  = sqrt_lambda[is_neg] * np.cosh(theta_plus[is_neg])
-        v_plus[is_neg]  = sqrt_lambda[is_neg] * np.sinh(theta_plus[is_neg])
-        u_minus[is_neg] = sqrt_lambda[is_neg] * np.cosh(theta_minus[is_neg])
-        v_minus[is_neg] = sqrt_lambda[is_neg] * np.sinh(theta_minus[is_neg])
+        u_plus[is_neg]  = (sqrt_lambda[is_neg] * np.cosh(theta_plus[is_neg])).reshape(-1, 1)
+        v_plus[is_neg]  = (sqrt_lambda[is_neg] * np.sinh(theta_plus[is_neg])).reshape(-1, 1)
+        u_minus[is_neg] = (sqrt_lambda[is_neg] * np.cosh(theta_minus[is_neg])).reshape(-1, 1)
+        v_minus[is_neg] = (sqrt_lambda[is_neg] * np.sinh(theta_minus[is_neg])).reshape(-1, 1)
 
     # v_plus_pred and v_minus_pred should be (d,), not (d, o)
     # For now, use the first output (j=0) for each input dimension
-    v_plus_pred = v_plus[:, 0]
-    v_minus_pred = v_minus[:, 0]
+    # v_plus_pred = v_plus[:, 0]
+    # v_minus_pred = v_minus[:, 0]
+    v_plus_pred = v_plus
+    v_minus_pred = v_minus
     u_plus_pred = u_plus
     u_minus_pred = u_minus
 
     return v_plus_pred, u_plus_pred, v_minus_pred, u_minus_pred
-
-# def predict_parameters(lambda_val, c, beta):
-#     lambda_val = np.array(lambda_val).flatten()  # shape (d,)
-#     c = np.array(c).flatten()                    # shape (d,)
-#     beta = np.array(beta).flatten()              # shape (d,)
-
-#     d = beta.shape[0]
-
-#     abs_lambda = np.abs(lambda_val)
-#     sqrt_lambda = np.sqrt(abs_lambda)
-#     c_over_lambda = c / abs_lambda
-#     beta_over_c = beta / c
-
-#     # Clip to ensure numerical stability
-#     c_over_lambda = np.clip(c_over_lambda, 1, None)
-
-#     theta_plus = 0.5 * (np.arccosh(c_over_lambda) + np.arcsinh(beta_over_c))
-#     theta_minus = 0.5 * (np.arccosh(c_over_lambda) - np.arcsinh(beta_over_c))
-
-#     v_plus = np.zeros(d)
-#     u_plus = np.zeros(d)
-#     v_minus = np.zeros(d)
-#     u_minus = np.zeros(d)
-
-#     is_pos = lambda_val > 0
-#     is_neg = ~is_pos
-
-#     # λ > 0
-#     v_plus[is_pos]  = sqrt_lambda[is_pos] * np.cosh(theta_plus[is_pos])
-#     u_plus[is_pos]  = sqrt_lambda[is_pos] * np.sinh(theta_plus[is_pos])
-#     v_minus[is_pos] = sqrt_lambda[is_pos] * np.cosh(theta_minus[is_pos])
-#     u_minus[is_pos] = sqrt_lambda[is_pos] * np.sinh(theta_minus[is_pos])
-
-#     # λ < 0
-#     u_plus[is_neg]  = sqrt_lambda[is_neg] * np.cosh(theta_plus[is_neg])
-#     v_plus[is_neg]  = sqrt_lambda[is_neg] * np.sinh(theta_plus[is_neg])
-#     u_minus[is_neg] = sqrt_lambda[is_neg] * np.cosh(theta_minus[is_neg])
-#     v_minus[is_neg] = sqrt_lambda[is_neg] * np.sinh(theta_minus[is_neg])
-
-#     return v_plus, u_plus, v_minus, u_minus
-
-
 
 def main():
     config  = NetworkConfig()
@@ -416,7 +301,7 @@ def main():
 
     # Compute final w_tilde (beta)
     with torch.no_grad():
-        w_tilde_final = (network.u_plus * network.v_plus[:, None] - network.u_minus * network.v_minus[:, None]).cpu().numpy()
+        w_tilde_final = (network.u_plus * network.v_plus - network.u_minus * network.v_minus).cpu().numpy()
 
     # Predict parameters using your theory
     lambda_pred = compute_lambda(network)
@@ -429,6 +314,23 @@ def main():
     print("u_minus_pred =", u_minus_pred)
     print("v_plus_pred =", v_plus_pred)
     print("v_minus_pred =", v_minus_pred)
+
+
+    print('Invariance check:')
+    print('Empirical: ')
+    print('lambda plus: ', network.v_plus.detach().cpu().numpy()**2 - network.u_plus.detach().cpu().numpy()**2)
+    print('lambda minus: ', network.v_minus.detach().cpu().numpy()**2 - network.u_minus.detach().cpu().numpy()**2)
+    print('c: ', network.v_plus.detach().cpu().numpy() * network.v_minus.detach().cpu().numpy() + (network.u_plus.detach().cpu().numpy() * network.u_minus.detach().cpu().numpy()))
+    print('Analytical: ')
+    print('lambda plus: ', v_plus_pred**2 - u_plus_pred**2)
+    print('lambda minus: ', v_minus_pred**2 - u_minus_pred**2)
+    print('c: ', v_plus_pred * v_minus_pred + (u_plus_pred * u_minus_pred))
+
+    # print('Differences between predicted and true parameters:')
+    # print('u_plus_pred - u_plus_true =', np.linalg.norm(u_plus_pred - network.u_plus.detach().cpu().numpy()))
+    # print('u_minus_pred - u_minus_true =', np.linalg.norm(u_minus_pred - network.u_minus.detach().cpu().numpy()))
+    # print('v_plus_pred - v_plus_true =', np.linalg.norm(v_plus_pred - network.v_plus.detach().cpu().numpy()))
+    # print('v_minus_pred - v_minus_true =', np.linalg.norm(v_minus_pred - network.v_minus.detach().cpu().numpy()))
 
     network.plot_training_results()
 
