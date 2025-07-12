@@ -11,7 +11,7 @@ np.set_printoptions(precision=15)
 
 @dataclass
 class PretrainConfig:
-    d: int = 1
+    d: int = 5
     o: int = 1
     N: int = 5
     T: int = int(1e5)
@@ -22,7 +22,7 @@ class PretrainConfig:
 
 @dataclass
 class FinetuneConfig:
-    d: int = 1
+    d: int = 5
     o: int = 1
     N: int = 5
     T: int = int(1e5)
@@ -36,7 +36,7 @@ gamma = 1.0  # Set your gamma value
 def compute_analytical_c_ft(lambda_pt, c_pt, gamma, beta_aux):
     r = lambda_pt / c_pt
     s = c_pt / beta_aux
-    return beta_aux * (r + 1) * (s + np.sqrt(s**2+1)) + gamma**2
+    return np.abs(beta_aux) * (r + 1) * (s + np.sqrt(s**2+1)) + gamma**2
 
 def compute_beta(network):
     """
