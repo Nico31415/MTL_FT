@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from dataclasses import dataclass
 from typing import Tuple
+from regularizer import solve_constrained_opt, regularizer_Q
 
 # Set precision for better numerical stability
 torch.set_default_dtype(torch.float64)
@@ -11,13 +12,13 @@ np.set_printoptions(precision=15)
 
 @dataclass
 class NetworkConfig:
-    d: int = 10  # input dimension
+    d: int = 3  # input dimension
     o: int = 1   # output dimension
-    N: int = 5   # number of samples
-    T: int = 100000
-    lr: float = 1e-9
+    N: int = 3   # number of samples
+    T: int = 1000
+    lr: float = 1e-3
     scale: float = 0.1
-    teacher_scale: float = 5.0
+    teacher_scale: float = 1.0
     seed: int = 42
 
 class DiagonalNetwork(nn.Module):
@@ -338,6 +339,27 @@ def main():
     print('u_minus_pred - u_minus_true =', np.linalg.norm(u_minus_pred - network.u_minus.detach().cpu().numpy()))
     print('v_plus_pred - v_plus_true =', np.linalg.norm(v_plus_pred - network.v_plus.detach().cpu().numpy()))
     print('v_minus_pred - v_minus_true =', np.linalg.norm(v_minus_pred - network.v_minus.detach().cpu().numpy()))
+
+
+
+    print('Difference between predicted and true beta:')
+
+    print('true: ', network.true_beta)
+
+    X = network.X         # shape (d, N)
+    y = network.y.flatten()  # shape (N,)
+    c = c_pt.flatten()    # shape (d,)
+
+    beta_star, reg_val = solve_constrained_opt(X, y, c)
+    print('predicted:', beta_star)
+
+    b = beta_star.reshape(-1, 1)
+    print('Constraint predicted: ', b.T @ X - y)
+    print('Constraint true: ', network.true_beta.T@X - y)
+
+
+    print('Regularizer value predicted: ', reg_val)
+    print('Regularizer value true: ', regularizer_Q(beta_star, c))
 
     network.plot_training_results()
 
