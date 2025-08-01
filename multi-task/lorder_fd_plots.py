@@ -50,28 +50,49 @@ def compute_l_order_and_fd(lambda_pt, c_pt, beta_aux, beta_main, gamma, epsilon=
 # --- Plot Utility ---
 
 def plot_heatmaps(X, Y, l_order_grid, fd_grid, title_prefix, x_label, y_label, log_x=False, log_y=False, settings_dict=None):
+    import numpy as np
+    import matplotlib.pyplot as plt
+
     fig, axs = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
     if settings_dict:
         settings_text = ', '.join([f"{k} = {v}" for k, v in settings_dict.items()])
         fig.suptitle(f"{title_prefix} Settings: {settings_text}", fontsize=12, y=0.98)
 
+    # --- Construct cell edges ---
+    def get_edges(arr, log=False):
+        if log:
+            log_arr = np.log10(arr)
+            step = np.diff(log_arr) / 2
+            edges = np.concatenate([
+                [log_arr[0] - step[0]],
+                log_arr[:-1] + step,
+                [log_arr[-1] + step[-1]]
+            ])
+            return 10**edges
+        else:
+            step = np.diff(arr) / 2
+            edges = np.concatenate([
+                [arr[0] - step[0]],
+                arr[:-1] + step,
+                [arr[-1] + step[-1]]
+            ])
+            return edges
+
+    X_edges = get_edges(X, log=log_x)
+    Y_edges = get_edges(Y, log=log_y)
+    X_grid, Y_grid = np.meshgrid(X_edges, Y_edges)
+
     for ax, data, title in zip(
         axs,
         [l_order_grid, fd_grid, l_order_grid + fd_grid],
         ["l-order", "Feature Dependence", "l-order + FD"]
     ):
-        im = ax.imshow(
-            data,
-            aspect='auto',
-            origin='lower',
-            extent=[X[0], X[-1], Y[0], Y[-1]],
-            cmap='viridis'
-        )
+        pcm = ax.pcolormesh(X_grid, Y_grid, data, shading='auto', cmap='viridis')
         ax.set_title(f"{title_prefix}: {title}")
         ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
-        fig.colorbar(im, ax=ax)
+        fig.colorbar(pcm, ax=ax)
 
         if log_x:
             ax.set_xscale('log')
@@ -81,12 +102,85 @@ def plot_heatmaps(X, Y, l_order_grid, fd_grid, title_prefix, x_label, y_label, l
     plt.tight_layout(rect=[0, 0, 1, 0.93])
     plt.show()
 
+
+# def plot_heatmaps(X, Y, l_order_grid, fd_grid, title_prefix, x_label, y_label, log_x=False, log_y=False, settings_dict=None):
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+
+#     fig, axs = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+
+#     if settings_dict:
+#         settings_text = ', '.join([f"{k} = {v}" for k, v in settings_dict.items()])
+#         fig.suptitle(f"{title_prefix} Settings: {settings_text}", fontsize=12, y=0.98)
+
+#     # Create meshgrid for pcolormesh (must match data grid shape)
+#     X_grid, Y_grid = np.meshgrid(X, Y)
+
+#     for ax, data, title in zip(
+#         axs,
+#         [l_order_grid, fd_grid, l_order_grid + fd_grid],
+#         ["l-order", "Feature Dependence", "l-order + FD"]
+#     ):
+#         # Transpose data because meshgrid assumes (Y, X) shape
+#         pcm = ax.pcolormesh(
+#             X_grid, Y_grid, data.T,  # <--- key fix: transpose
+#             shading='auto',
+#             cmap='viridis'
+#         )
+
+#         ax.set_title(f"{title_prefix}: {title}")
+#         ax.set_xlabel(x_label)
+#         ax.set_ylabel(y_label)
+
+#         if log_x:
+#             ax.set_xscale('log')
+#         if log_y:
+#             ax.set_yscale('log')
+
+#         fig.colorbar(pcm, ax=ax)
+
+#     plt.tight_layout(rect=[0, 0, 1, 0.93])
+#     plt.show()
+
+
+# def plot_heatmaps(X, Y, l_order_grid, fd_grid, title_prefix, x_label, y_label, log_x=False, log_y=False, settings_dict=None):
+#     fig, axs = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+
+#     if settings_dict:
+#         settings_text = ', '.join([f"{k} = {v}" for k, v in settings_dict.items()])
+#         fig.suptitle(f"{title_prefix} Settings: {settings_text}", fontsize=12, y=0.98)
+
+#     for ax, data, title in zip(
+#         axs,
+#         [l_order_grid, fd_grid, l_order_grid + fd_grid],
+#         ["l-order", "Feature Dependence", "l-order + FD"]
+#     ):
+#         im = ax.imshow(
+#             data,
+#             aspect='auto',
+#             origin='lower',
+#             extent=[X[0], X[-1], Y[0], Y[-1]],
+#             cmap='viridis'
+#         )
+#         ax.set_title(f"{title_prefix}: {title}")
+#         ax.set_xlabel(x_label)
+#         ax.set_ylabel(y_label)
+#         fig.colorbar(im, ax=ax)
+
+#         if log_x:
+#             ax.set_xscale('log')
+#         if log_y:
+#             ax.set_yscale('log')
+
+#     plt.tight_layout(rect=[0, 0, 1, 0.93])
+#     plt.show()
+
 # --- Group 1 ---
 def group1():
     beta_aux_vals = np.logspace(np.log10(0.0005), np.log10(20), 100)
     lambda_over_c_vals = np.linspace(-1, 1, 100)
     beta_main = 1
-    c_pt_fixed = 0.05
+    c_pt_fixed = 1e-5
     gamma = 0
 
     l_order_grid = np.zeros((len(lambda_over_c_vals), len(beta_aux_vals)))
@@ -191,8 +285,8 @@ def group4():
     beta_aux = 1
     gamma = 0
 
-    lambda_over_c_vals = np.linspace(-1, 1, 100)
-    beta_main_vals = np.logspace(np.log10(5), np.log10(5e-5), 100)  # produces c_pt / beta_main from 0.1 to 5
+    lambda_over_c_vals = np.linspace(-1, 1, 1000)
+    beta_main_vals = np.logspace(np.log10(5), np.log10(5e-5), 1000)  # produces c_pt / beta_main from 0.1 to 5
     c_over_beta_vals = c_pt / beta_main_vals
 
     l_order_grid = np.zeros((len(lambda_over_c_vals), len(beta_main_vals)))

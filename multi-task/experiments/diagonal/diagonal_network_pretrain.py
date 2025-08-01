@@ -17,13 +17,24 @@ import pandas as pd
 
 import functions.networks as nt
 
+def get_parameters(c, lmda):
+    # if np.any(lmda == 0):
+    #     raise ValueError("λ must be nonzero.")
+    if np.any(c**2 < lmda**2):
+        raise ValueError("Require c² ≥ λ² for real outputs.")
+    v = np.sqrt((c + lmda) / 2)
+    u = np.sqrt((c - lmda) / 2)
+    return v, v, u, u  # v⁺, v⁻, u⁺, u⁻
+
+
 class DiagonalNet(nn.Module):
-    def __init__(self, inp_dim, scaling=1.):
+    def __init__(self, inp_dim, scaling=1., lmda = 0., c = 0.001):
         super().__init__()
-        self.w_pos = nn.Parameter(scaling*torch.ones(inp_dim))
-        self.v_pos = nn.Parameter(scaling*torch.ones(inp_dim))
-        self.v_neg = nn.Parameter(scaling*torch.ones(inp_dim))
-        self.w_neg = nn.Parameter(scaling*torch.ones(inp_dim))
+        w_pos, w_neg, v_pos, v_neg = get_parameters(c, lmda)
+        self.w_pos = nn.Parameter(w_pos*torch.ones(inp_dim))
+        self.v_pos = nn.Parameter(v_pos*torch.ones(inp_dim))
+        self.v_neg = nn.Parameter(v_neg*torch.ones(inp_dim))
+        self.w_neg = nn.Parameter(w_neg*torch.ones(inp_dim))
     
     def beta(self):
         return self.w_pos*self.v_pos-self.w_neg*self.v_neg
@@ -39,18 +50,12 @@ def l2_norm(x):
 
 def compute_c(model):
     with torch.no_grad():
-        c = (torch.sum(model.w_pos * model.w_neg) + torch.sum(model.v_pos * model.v_neg)).item()
+        c = (model.w_pos * model.w_neg + model.v_pos * model.v_neg).numpy()
     return c
 
 def compute_lambda(model):
     with torch.no_grad():
-        beta = model.beta()
-        l1 = l1_norm(beta)
-        l2 = l2_norm(beta)
-        if l1 > 0:
-            lambda_val = l2 / l1
-        else:
-            lambda_val = 0.0
+        lambda_val = (model.w_pos **2 - model.v_pos **2).numpy()
     return lambda_val
 
 def train(model, train_data, val_data, test_every_n_epochs=50, epochs=1000, lr=0.01, momentum=0., lr_tuning=True, test_at_end_only=False, threshold=1e-5):
@@ -61,7 +66,10 @@ def train(model, train_data, val_data, test_every_n_epochs=50, epochs=1000, lr=0
     norms = []
     x, y = train_data
     val_x, val_y = val_data
+    print('training for ', epochs, ' epochs', 'with learning rate ', lr)
     for i in tqdm(range(epochs)):
+        if i % 1000 == 0:
+            print('epoch: ', i)
         optimizer.zero_grad()
         loss = F.mse_loss(model(x), y)
         loss.backward()
@@ -137,16 +145,22 @@ def main(args):
     val_x = val_x/torch.sqrt(torch.mean(val_x**2, dim=-1, keepdims=True))
     y = teacher(x, *param)
     val_y = teacher(val_x, *param)
-    net = DiagonalNet(args.inp_dim, scaling=args.scaling)
+    net = DiagonalNet(args.inp_dim, scaling=args.scaling, lmda=args.lmda, c=args.c)
     # Print initial values
     c_pt = compute_c(net)
     lambda_pt = compute_lambda(net)
-    print(f"Before pretraining: c_pt = {c_pt:.6f}, lambda_pt = {lambda_pt:.6f}")
+    # print('net.w_pos', net.w_pos)
+    # print('net.v_pos', net.v_pos)
+    # print('net.v_neg', net.v_neg)
+    # print('net.w_neg', net.w_neg)
+    # print(f"Before pretraining: c_pt = {c_pt}, lambda_pt = {lambda_pt}")
+    # print('epochs: ', args.epochs)
+    # print('lr: ', args.lr)
     df, net, norm_df = train(net, (x, y), (val_x, val_y), lr=args.lr, epochs=args.epochs, lr_tuning=(not args.no_tuning), threshold=args.threshold)
     # Print final values
     c_pt_final = compute_c(net)
     lambda_pt_final = compute_lambda(net)
-    print(f"After pretraining: c_pt = {c_pt_final:.6f}, lambda_pt = {lambda_pt_final:.6f}")
+    print(f"After pretraining: c_pt = {c_pt_final}, lambda_pt = {lambda_pt_final}")
     df.to_feather(os.path.join(args.save_folder, 'df.feather'))
     norm_df.to_feather(os.path.join(args.save_folder, 'norm_df.feather'))
     teacher_df = pd.DataFrame({
@@ -168,6 +182,9 @@ def get_parser():
     parser.add_argument('--lr', type=float, default=1e20)
     parser.add_argument('--epochs', type=int, default=int(1e5))
     parser.add_argument('--scaling', type=float, default=1.)
+    parser.add_argument('--c', type=float, default=0.001)
+    parser.add_argument('--lmda', type=float, default=1.5)
+
     return parser
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@ import os
 import itertools
 import collections
 import subprocess
+import shlex
 
 class ArgparseArray:
     """Generate array of argparse arguments to call using a slurm-type cluster.
@@ -57,25 +58,29 @@ class ArgparseArray:
         args = self.get_args(array_id)
         if verbose:
             print(args)
-        str_args = [python_cmd, script]
+        
+        # Build command as a string to handle negative numbers properly
+        cmd_parts = [python_cmd, script]
+        
         positional_keys = [key for key in args.keys() if key[:6]=='posarg']
         positional_keys.sort()
         positional_args = [args[key] for key in positional_keys]
-        str_args = str_args + positional_args
+        cmd_parts.extend(positional_args)
+        
         for key, value in args.items():
             if isinstance(value, (bool,)):
                 if value:
-                    str_args.append('--{}'.format(key,))
+                    cmd_parts.append(f'--{key}')
             else:
                 if key[:6] != 'posarg':
                     if isinstance(value, (list,)):
-                        str_args.append('--{}'.format(key))
                         for val in value:
-                            str_args.append(str(val))
+                            cmd_parts.append(f'--{key}={val}')
                     else:
-                        str_args.append('--{}'.format(key,))
-                        str_args.append(str(value))
-        subprocess.run(str_args)
+                        cmd_parts.append(f'--{key}={value}')
+        
+        cmd_str = ' '.join(cmd_parts)
+        subprocess.run(cmd_str, shell=True)
 
 def name_instance(*keys, slash_replacement='>', separator='--', base_folder='', filename=''):
     def fun(**kwargs):

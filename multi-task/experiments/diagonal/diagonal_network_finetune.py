@@ -17,13 +17,31 @@ import pandas as pd
 
 import functions.networks as nt
 
+def get_parameters(c, lmda):
+    # if np.any(lmda == 0):
+    #     raise ValueError("λ must be nonzero.")
+    if np.any(c**2 < lmda**2):
+        raise ValueError("Require c² ≥ λ² for real outputs.")
+    v = np.sqrt((c + lmda) / 2)
+    u = np.sqrt((c - lmda) / 2)
+    return v, v, u, u  # v⁺, v⁻, u⁺, u⁻
+
 class DiagonalNet(nn.Module):
-    def __init__(self, inp_dim, scaling=1., linear_readout=False):
+    def __init__(self, inp_dim, scaling=1., lmda = 0., c = 0.001, linear_readout=False):
         super().__init__()
-        self.w_pos = nn.Parameter(scaling*torch.ones(inp_dim))
-        self.v_pos = nn.Parameter(scaling*torch.ones(inp_dim))
-        self.v_neg = nn.Parameter(scaling*torch.ones(inp_dim))
-        self.w_neg = nn.Parameter(scaling*torch.ones(inp_dim))
+
+        w_pos, w_neg, v_pos, v_neg = get_parameters(c, lmda)
+
+        # self.w_pos = nn.Parameter(scaling*torch.ones(inp_dim))
+        # self.v_pos = nn.Parameter(scaling*torch.ones(inp_dim))
+        # self.v_neg = nn.Parameter(scaling*torch.ones(inp_dim))
+        # self.w_neg = nn.Parameter(scaling*torch.ones(inp_dim))
+
+        self.w_pos = nn.Parameter(w_pos*torch.ones(inp_dim))
+        self.v_pos = nn.Parameter(v_pos*torch.ones(inp_dim))
+        self.v_neg = nn.Parameter(v_neg*torch.ones(inp_dim))
+        self.w_neg = nn.Parameter(w_neg*torch.ones(inp_dim))
+
         self.linear_readout = linear_readout
     
     def beta(self):
